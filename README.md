@@ -220,6 +220,52 @@ one way, then with it selected use **Tools → Join Node to Way** to attach it t
 the other. The utilsplugin2 plugin adds an "Add nodes at intersections" action
 if you have many to do.
 
+### Adding a bridge
+
+**Check whether it is already mapped first.** The roads in your area already
+exist in OSM; the waterway is what you are adding. If the road already carries
+`bridge=yes` over that spot, there is nothing to add — just make sure your new
+waterway does not share a node with it. Splitting and retagging an existing road
+is a heavier edit than adding new geometry, and it shows up in your changeset as
+a modification to someone else's work, so only do it when the bridge is genuinely
+missing.
+
+When it is missing, the road is what gets split — never the waterway:
+
+1. Put a node on the road at each end of the bridge deck, where it meets solid
+   ground. Snap them to the existing way rather than drawing new geometry.
+2. Select both nodes and **Tools → Split Way**. The road becomes three sections,
+   all inheriting its existing tags (`highway`, `surface`, `name`, `ref` ...).
+3. Select the middle section and add:
+
+```
+bridge = yes
+layer  = 1
+```
+
+`layer` is not optional in practice. It is how renderers and routers know what
+passes over what, and for a simple crossing it is almost always `1`. Without it
+you have asserted a bridge that is on the same level as the thing it crosses.
+
+**Do not let the bridge share a node with the waterway.** That is the difference
+between a bridge and a ford, and it is the single most common way to get this
+wrong.
+
+**Do not end a bridge at a junction.** If a side road joins right at the
+abutment, put the split slightly clear of it.
+
+More specific values exist where you know the structure: `bridge=viaduct`,
+`boardwalk`, `covered`, `trestle`, `movable`, `aqueduct`, `low_water_crossing`.
+Prefer `bridge=yes` plus `bridge:structure=*` for engineering types —
+`bridge=cable-stayed` is discouraged in favour of
+`bridge=yes` + `bridge:structure=cable-stayed`. If you cannot tell from imagery,
+`bridge=yes` is the honest answer.
+
+Two things that are *not* bridges: a pipe carrying water under a road is a
+culvert on the waterway (`tunnel=culvert`), and `bridge=culvert` should not be
+used. Where the lower feature is surrounded by earth, it wants `tunnel=*`, not a
+bridge on the upper way.
+
 ### Upload
 
 Validate again (`Shift+V`), then **File → Upload data** (`Ctrl+Shift+↑`), with
