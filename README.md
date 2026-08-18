@@ -215,10 +215,20 @@ For an irrigation ditch crossed by a road, a culvert is overwhelmingly the most
 likely; ditches are nearly always piped under roads. Reserve `ford=yes` for
 crossings you know are fords.
 
-Only a ford needs a shared node. To create one, place a node at the crossing on
-one way, then with it selected use **Tools → Join Node to Way** to attach it to
-the other. The utilsplugin2 plugin adds an "Add nodes at intersections" action
-if you have many to do.
+Only a ford needs a shared node, and where two ways cross without one the
+easiest fix is the **utilsplugin2** plugin: select both ways, then
+**More tools → Add nodes at intersections** (`Shift+I`). It adds a node at every
+intersection point and does not split the ways.
+
+Without the plugin: draw a node on one way at the crossing so it becomes part of
+that way, select it, and use **Tools → Join Node to Way** (`J`) to pull the other
+way through it. `M` (Merge Nodes) fuses two nodes that are already nearly
+coincident.
+
+Then tag the shared node `ford=yes` — and check it really is shared before
+moving on. With the node selected, its parent-ways list should name *both* the
+path and the watercourse. A node belonging to only one of them looks identical
+on screen, and that is the whole failure mode.
 
 ### Adding a bridge
 
