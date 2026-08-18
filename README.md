@@ -1,0 +1,263 @@
+# hydrate-osm
+
+Pull USGS hydrography into OpenStreetMap-ready geometry, so that under-mapped
+areas stop hiding their water.
+
+## Why
+
+Standing at a trailhead with a creek running 50 m away, and your routing tools
+show nothing — because OSM has nothing. The water is real; the map is empty.
+
+That is common across large parts of the rural US. Most American streams in OSM
+arrived via a bulk NHD import around 2007–09, and wherever that import didn't
+reach, the hydrography was simply never drawn. Trails get mapped because people
+walk them. Creeks don't, because nobody thinks to.
+
+USGS has the data, in the public domain, at 1:24,000. `hydrate-osm` fetches it,
+converts it to correctly-tagged OSM geometry, and hands you a file to review in
+JOSM before any of it touches the map.
+
+A worked example: at Rich Creek Trailhead in Park County, Colorado, OSM has no
+waterway within 1.5 km. USGS has 23 reaches within 1 km, the nearest 2 m from
+the guidepost.
+
+## Install
+
+Nothing to install. One file, Python 3.8+, standard library only.
+
+```sh
+curl -O https://raw.githubusercontent.com/glynternet/hydrate-osm/main/hydrate.py
+chmod +x hydrate.py
+```
+
+## Use
+
+Two steps, deliberately separate so you can look at what came back before
+converting it.
+
+```sh
+./hydrate.py query --at 39.0681575,-106.1164971 --radius 1000 -o water.geojson
+./hydrate.py convert water.geojson water.osm
+```
+
+Then open `water.osm` in JOSM, review it against aerial imagery, and copy what
+you've checked into a downloaded OSM layer.
+
+### Three workflows
+
+**A place you care about** — a trailhead, a camp, a water stop.
+
+```sh
+./hydrate.py query --at LAT,LON --radius 1000 --traverse -o here.geojson
+```
+
+`--traverse` extends each *named* watercourse to its full extent instead of
+slicing it at the search radius, so ways end at confluences rather than at an
+arbitrary circle edge. Expect it to multiply the result: one 1 km query near
+Rich Creek goes from 23 reaches to 244, because the South Fork South Platte
+alone is 184 reaches over 72 km. Unnamed reaches stay clipped — roughly 30% of
+reaches carry no GNIS id, so nothing can extend them.
+
+**A route** — everything within reach of a GPX track.
+
+```sh
+./hydrate.py query --track ride.gpx --radius 500 -o route.geojson
+```
+
+The whole track becomes one buffered query per layer rather than dozens of
+overlapping circles. Track points are thinned to half the radius first, since
+vertices closer together than that add nothing to a buffered query and plenty
+to the request body.
+
+**A watershed** — systematically filling in an area.
+
+```sh
+./hydrate.py huc-at 39.0681575,-106.1164971    # -> 101900010202
+./hydrate.py query --huc 101900010202 -o huc.geojson
+```
+
+HUC12 is the natural unit: it is how NHD is organised, and its boundary is a
+real watershed divide rather than an arbitrary box. Queried against the true
+polygon, not its bounding box — for the Rich Creek subwatershed that is the
+difference between 680 reaches and 1,157.
+
+Ephemeral reaches are dropped by default in this mode (`--ephemeral keep` to
+override). They only run after rain, so they are useless for finding water, and
+mapping every ephemeral wash is the kind of clutter that draws objections.
+
+## What it produces
+
+| source | OSM tags |
+|---|---|
+| Stream/River, perennial | `waterway=stream` or `river` |
+| Stream/River, intermittent or ephemeral | + `intermittent=yes` |
+| Canal/Ditch | `waterway=ditch` |
+| Lake/Pond | `natural=water` + `water=pond` |
+| Reservoir | `natural=water` + `water=reservoir` |
+| Swamp/Marsh | `natural=wetland` + `wetland=marsh` |
+| Spring/Seep | `natural=spring` |
+| Pipeline, underground conduit | dropped |
+
+Beyond the tag mapping, `convert` does four things that matter:
+
+**Deduplicates nodes**, so reaches meeting at a junction share a node instead of
+stacking two on top of each other. Without this you upload a network that looks
+right and is topologically disconnected.
+
+**Merges contiguous reaches** carrying identical tags. NHD splits watercourses
+into short reaches for its flow model; OSM doesn't want that. Merging happens
+only where it is unambiguous — among ways sharing a tag set, exactly one
+arriving at a node and exactly one leaving. That keeps confluences intact (a
+tributary ending on an intermediate node is fine and normal in OSM) while
+refusing the genuinely undecidable cases: a divergence, or two same-named
+channels flowing into each other. Ways are never reversed, because the source
+digitises in flow direction and OSM wants waterways drawn downstream.
+
+**Builds multipolygons** for waterbodies with islands. One marsh near Rich Creek
+has 23 of them; a bare outer ring would claim all 23 as water.
+
+**Keeps waterbody connectors.** Where a stream threads through a pond, these
+carry the flow line across it. Dropping them as "artificial" fractures the
+watercourse into disconnected pieces.
+
+## Stream or river?
+
+Neither USGS product says. NHDPlus lumps everything under FType 460
+"StreamRiver"; 3DHP has a `River` type but applies it to ~35k features
+nationally out of 22M, so it means "major river", not OSM's threshold.
+
+OSM's rule is that *a stream can be jumped across by an active, able-bodied
+person*, suggested as under 3 m — and for varying watercourses, judged at **high
+water**. Two signals are available:
+
+- **the name**, which describes the whole named feature and is stable. US
+  toponymy is consistent enough to use: Creek, Brook, Run, Branch and Gulch are
+  small; River is not.
+- **`qama`**, modelled mean annual flow in cfs, which describes *this reach* and
+  varies enormously — the South Fork South Platte runs 0.18 to 124 cfs over its
+  length.
+
+The name wins where both are available, since it matches how surrounding
+features are already tagged. `qama` is used to catch disagreements: where the
+name says one thing and the flow says the other, the feature gets a
+`fixme` tag rather than a silent guess. Search `fixme` in JOSM to review them.
+
+The middle band (10–30 cfs) is treated as inconclusive on purpose.
+Flow-to-width conversion is regional and noisy, and a hard single threshold
+would split rivers arbitrarily wherever `qama` happened to cross it. Note also
+that `qama` is a *mean annual* figure, so in a snowmelt catchment it
+understates the high-water width OSM asks you to judge by.
+
+## Reviewing in JOSM
+
+1. Open the `.osm` — it loads as an editable layer with negative ids
+2. **File → Download data** for the same area, giving you a second layer of real OSM
+3. **Imagery → Bing** (or Esri World Imagery); check alignment
+4. Review, then select what you've checked, `Ctrl+C`, switch to the OSM layer,
+   **`Ctrl+Shift+V`** (paste at source position)
+5. Upload from the OSM layer, with `source=USGS NHDPlus HR` on the *changeset*
+
+Opt in rather than prune: only what you deliberately copy across ever reaches
+the upload layer.
+
+For anything beyond a handful of features, install the **todo** plugin
+(Edit → Preferences → Plugins → search `todo`). Select a slice, add it to the
+list, and work through it one feature at a time — 489 ways is several sittings,
+not one.
+
+Useful searches (`Ctrl+F`):
+
+```
+fixme                    the classifier's own uncertain calls
+waterway=stream -name=*  unnamed streams
+intermittent=yes         seasonal channels
+water=pond               waterbodies
+```
+
+## Mapping or importing?
+
+This matters. Reviewing each feature against imagery and drawing what you've
+checked is **mapping**, and needs nobody's permission. Bulk-converting a
+watershed and uploading it is an **import**, and needs the
+[Import Guidelines](https://wiki.openstreetmap.org/wiki/Import/Guidelines): a
+wiki page, a post to `imports@` and to your local community forum, a dedicated
+account, and changeset tags pointing at the wiki page.
+
+The line is roughly "could you honestly say you looked at each of these?". A
+HUC12 holds several hundred reaches, so the answer there is no unless you have
+genuinely spent the evenings.
+
+NHD-derived imports get scrutiny, because the 2007–09 wave left known problems:
+geometry not matching imagery, excessive vertex density, artificial paths
+confusing later mappers, duplication over hand-mapped data. Expect to be asked
+how you conflated and how you checked.
+
+## Gotchas
+
+**Datum.** The two USGS services disagree by a constant ~1.1 m on identical
+geometry — NHD is natively NAD83, OSM is WGS84, and they differ in whether they
+transform on `outSR=4326`. Well inside the error of a 1:24k source either way,
+but align to imagery before uploading rather than trusting either absolute
+position.
+
+**Names.** NHDPlus layer 4 (NonNetworkNHDFlowline) often has `gnis_name` null
+where 3DHP resolves a name — "Platte Station Ditch" is named in 3DHP and unnamed
+in NHDPlus. Only network flowlines reliably carry GNIS ids.
+
+**SQL-shaped `where` clauses get 403'd from some clients.** `IN (...)` and `OR`
+are rejected from Python while succeeding from curl, with a byte-identical
+request body and across every header, HTTP version and ALPN combination — so
+the trigger appears to be an injection heuristic weighted by TLS fingerprint.
+Plain `field='value'` passes from anywhere, which is why `--traverse` issues one
+query per id rather than a single `IN`.
+
+**Paging.** `maxRecordCount` is 2000. Watch `exceededTransferLimit`; this tool
+pages automatically, but anything you write by hand against the API should too.
+
+## Data sources
+
+Defaults to **NHDPlus HR**, with `--source 3dhp` available.
+
+Three generations of the same data. **NHD** (late 1990s) digitised the blue
+lines off 1:24,000 paper topo maps — the origin of nearly every stream in both
+services, retired 2023. **NHDPlus HR** is that same linework with a joint
+USGS/EPA modelling layer added: routed network, plus flow, drainage area and
+slope per reach. Production halted in 2024; frozen, still served, designated a
+"bridge dataset" for the next several years. **3DHP** (2024→) starts over,
+deriving channels from lidar-scanned terrain rather than tracing old maps.
+
+Both are live because 3DHP is a *rolling* replacement, region by region. Until
+an area is reprocessed, 3DHP re-serves the old NHD linework through a newer
+schema that carries fewer attributes. Check `workunitid` on a 3DHP feature: a
+value of `NHD` means that area is not lidar-derived yet.
+
+| attribute | NHDPlus HR | 3DHP |
+|---|---|---|
+| perennial / intermittent | `fcode` | **absent** |
+| mean annual flow | `qama` | absent |
+| drainage area | `totdasqkm` | absent (announced as future) |
+| slope | `slope` | absent |
+| Strahler order | `streamorde` | `streamorder` |
+| network navigation | VAAs | Flow Network Derivatives |
+
+The perennial/intermittent split is why NHDPlus is the default. 3DHP has no
+field carrying it and none is announced, so everything from that source arrives
+looking perennial — do not use it to judge whether water will be there in
+August.
+
+## Limitations
+
+**United States only.** These are USGS services. For the UK the equivalent
+open data is OS Open Rivers and Environment Agency LIDAR, both OGL and
+OSM-compatible, but this tool does not speak to them.
+
+**The data is 1990s cartography** in most places, not fresh survey. It is a good
+guide and a poor authority. Check it against imagery.
+
+**Nothing here uploads to OSM.** Deliberately. The output is a file for you to
+review in an editor, and that review is the whole point.
+
+## Licence
+
+MIT. USGS data is a work of the US federal government and in the public domain;
+it is compatible with OSM's ODbL, which is why this approach is viable at all.

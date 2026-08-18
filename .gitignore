@@ -1,0 +1,5 @@
+*.geojson
+*.osm
+!examples/*.gpx
+__pycache__/
+*.pyc
