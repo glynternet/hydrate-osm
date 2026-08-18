@@ -148,21 +148,45 @@ would split rivers arbitrarily wherever `qama` happened to cross it. Note also
 that `qama` is a *mean annual* figure, so in a snowmelt catchment it
 understates the high-water width OSM asks you to judge by.
 
-## Reviewing in JOSM
+## Reviewing and uploading in JOSM
 
-1. Open the `.osm` — it loads as an editable layer with negative ids
-2. **File → Download data** for the same area, giving you a second layer of real OSM
-3. **Imagery → Bing** (or Esri World Imagery); check alignment
-4. Review, then select what you've checked, `Ctrl+C`, switch to the OSM layer,
-   **`Ctrl+Shift+V`** (paste at source position)
-5. Upload from the OSM layer, with `source=USGS NHDPlus HR` on the *changeset*
+### Set up two layers
 
-Opt in rather than prune: only what you deliberately copy across ever reaches
-the upload layer.
+1. Open the `.osm` — it loads as an editable layer, all objects new (negative ids)
+2. **File → Download from OSM** for the same area, and use **"Download as new
+   layer"**. Without that, real OSM data merges *into* your import layer, and
+   once positive and negative ids are intermingled, deleting a leftover from the
+   import can quietly delete a real OSM object instead.
+3. **Imagery → Bing** or **Esri World Imagery**. Check alignment before you
+   trust any geometry — see the datum note under Gotchas.
+
+You now have a scratch layer (the import) and an upload layer (real OSM). Only
+what you deliberately copy across ever reaches the upload.
+
+### Copy across what you have reviewed
+
+Select reviewed features in the import layer, `Ctrl+C`, switch to the OSM layer,
+then **Edit → Paste at source position** (`Ctrl+Alt+V`, expert mode only — tick
+"Expert mode" in Preferences or the action is unavailable).
+
+Three paste actions exist and only one is right here:
+
+| action | effect |
+|---|---|
+| Paste (`Ctrl+V`) | pastes at the **mouse cursor** — displaces everything |
+| Paste Tags (`Ctrl+Shift+V`) | applies the copied objects' **tags to your current selection** |
+| Paste at source position (`Ctrl+Alt+V`) | what you want — keeps real coordinates |
+
+Paste Tags is the dangerous one: with a road selected it will happily tag that
+road `waterway` + `natural=water`. If a "Conflicts in pasted tags" dialog
+appears, you have hit the wrong one — cancel it, press `Esc` to clear the
+selection, and use Paste at source position instead.
+
+### Work through it
 
 For anything beyond a handful of features, install the **todo** plugin
 (Edit → Preferences → Plugins → search `todo`). Select a slice, add it to the
-list, and work through it one feature at a time — 489 ways is several sittings,
+list, and work through one feature at a time — 489 ways is several sittings,
 not one.
 
 Useful searches (`Ctrl+F`):
@@ -173,6 +197,58 @@ waterway=stream -name=*  unnamed streams
 intermittent=yes         seasonal channels
 water=pond               waterbodies
 ```
+
+### Fix the crossings
+
+Validation (`Shift+V`) will flag waterways crossing roads. This is the most
+common thing NHD-derived geometry produces, because NHD models hydrology and
+has no opinion about roads. The right fix depends on what is physically there,
+so check imagery — do not guess:
+
+| reality | tagging | share a node? |
+|---|---|---|
+| water runs through a pipe under the road | split the waterway either side of the road; tag the middle section `tunnel=culvert` + `layer=-1` | **no** — they cross at different levels |
+| the road spans the water | split the road either side; tag the middle section `bridge=yes` + `layer=1` | **no** |
+| vehicles drive through the water | `ford=yes` on the node shared by both ways | **yes** — the node must belong to both |
+
+For an irrigation ditch crossed by a road, a culvert is overwhelmingly the most
+likely; ditches are nearly always piped under roads. Reserve `ford=yes` for
+crossings you know are fords.
+
+Only a ford needs a shared node. To create one, place a node at the crossing on
+one way, then with it selected use **Tools → Join Node to Way** to attach it to
+the other. The utilsplugin2 plugin adds an "Add nodes at intersections" action
+if you have many to do.
+
+### Upload
+
+Validate again (`Shift+V`), then **File → Upload data** (`Ctrl+Shift+↑`), with
+the **OSM layer active** — JOSM uploads the active layer, so uploading from the
+scratch layer sends unreviewed data.
+
+The dialog wants three things:
+
+- **Changeset comment** — what and where, specifically:
+  `Add hydrography (streams, ponds) around Rich Creek Trailhead, Park County CO, from USGS NHDPlus HR`
+- **Source** — `USGS NHDPlus HR`, on the changeset. Not on each feature: the
+  per-feature `NHD:*` tags left by the old import wave are now considered
+  clutter.
+- **Upload strategy** — a single request under ~1,000 objects, chunks of 1,000
+  above. A HUC12 at 489 ways technically fits in one, but split it by
+  watercourse anyway so each changeset stays reviewable and revertable.
+
+If it is an import, add `import=yes` and a link to your import wiki page, and
+upload from the dedicated import account.
+
+Conflicts (someone edited the same object since you downloaded) open the
+conflict resolution dialog rather than failing the upload.
+
+### Afterwards
+
+Overpass sees the data within about a minute; the standard tile layer takes
+minutes to an hour. If something went wrong, the **reverter** plugin undoes a
+changeset cleanly — better to revert your own mistake than have someone else do
+it for you.
 
 ## Mapping or importing?
 
