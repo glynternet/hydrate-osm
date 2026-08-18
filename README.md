@@ -200,10 +200,21 @@ water=pond               waterbodies
 
 ### Fix the crossings
 
-Validation (`Shift+V`) will flag waterways crossing roads. This is the most
-common thing NHD-derived geometry produces, because NHD models hydrology and
-has no opinion about roads. The right fix depends on what is physically there,
-so check imagery — do not guess:
+Validation runs independently of upload, as often as you like. `Alt+Shift+V`
+opens the Validation panel; `Shift+V` (or its Validation button) runs the check.
+
+Scope follows the selection, which is what makes it usable on a large batch:
+with nothing selected it checks every object in the layer, and with objects
+selected it checks only those. Validate the slice you just reviewed rather than
+all 489 ways at once — same principle as working through a todo list.
+
+Use the **Fix** button sparingly here. It handles mechanical problems
+(duplicate nodes, unclosed ways) well, but the warnings you will see most are
+waterways crossing roads, and those have no correct automatic answer.
+
+That crossing warning is the most common thing NHD-derived geometry produces,
+because NHD models hydrology and has no opinion about roads. The right fix
+depends on what is physically there, so check imagery — do not guess:
 
 | reality | tagging | share a node? |
 |---|---|---|
