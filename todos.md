@@ -36,8 +36,27 @@ the gap between the two clusters:                                  6.560 deg
 
 A single watercourse tiles continuously along its length, which is exactly what
 each cluster does on its own. Between them is one 570 km void with no reaches at
-all. Two unrelated creeks sharing a name and, in NHD, an id — so traversing the
-one near Alma drags in the one in Nebraska.
+all. NHD's own basin classification agrees:
+
+```
+HUC8 10190001  61 reaches   South Platte Headwaters (Park County, CO)
+HUC8 10250016  30 reaches   Platte (Phelps County, NE)
+```
+
+Two unrelated creeks, in different subbasins, sharing a name and an id — so
+traversing the one near Alma drags in the one in Nebraska.
+
+**This is an upstream NHD attribution error, not a misuse of the field.** GNIS ids
+identify a *named feature*, and are deliberately not unique per reach — one creek
+is many reaches all carrying the same id, which is precisely what makes traverse
+possible. Two distinct creeks in two states and two subbasins should carry two
+distinct ids; that they do not is a defect in NHD's attribution.
+
+The conclusion that matters for the fix: **the answer is not a better id field.**
+Any identity attribute can be wrong upstream, and there is no way to tell from
+inside a query whether this particular id is one of the bad ones. The spatial
+bound has to stay on regardless of how trustworthy identity looks, because it is
+the only constraint that fails safe.
 
 The README's claim that "roughly 30% of reaches carry no GNIS id, so nothing can
 extend them" is describing the same field and is correspondingly optimistic: the
@@ -113,6 +132,31 @@ quietly dangerous.
    refuse it and say so rather than writing it into the `.osm`.
 4. **Correct the README.** The `--traverse` section describes the GNIS id as
    identifying a named watercourse; it identifies a name, nationwide.
+
+### The two cases need removing for different reasons
+
+Verified against the live OSM API rather than by re-parsing the changeset: all 12
+ways are version 1, changeset 187666017, with their first nodes in Nebraska and
+Kansas and their nodes created across 187666011/187666017. They are real.
+
+**Kansas (Arkansas River, 1550711822)** — duplicate geometry. Two OSM ways already
+covered that stretch of river, mapped by another contributor in February. This is
+the clear-cut one.
+
+**Nebraska (11 Sacramento Creek ways)** — *not* duplicate. Checking the box shows
+only two pre-existing waterway ways, neither of them this creek, so the import
+added genuinely new and probably accurate USGS geometry. The geometry is not the
+problem; the provenance is. It is an unreviewed bulk import into a region nobody
+involved has surveyed, made as the side effect of a bug, with no import plan and
+no local consultation — which is what OSM's automated-edits norms exist to
+prevent, independently of whether the data happens to be good.
+
+Worth noting one of those two pre-existing ways was created by `SomeoneElse_Revert`,
+an account used for reverting problem edits. The area has seen this before and is
+watched.
+
+So: remove both sets, but do not describe the Nebraska one as fixing bad data. It
+is withdrawing data that was never yours to add.
 
 ### Cleanup
 
