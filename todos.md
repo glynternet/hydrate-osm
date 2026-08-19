@@ -1,118 +1,80 @@
 # Open work
 
-## [HIGH] `--traverse` has no spatial bound, and gnis_id is not unique
+`--traverse` published data into OSM 570 km outside the survey area. That had two
+independent causes; **the identity one is fixed** (see [Done](#done)), the scale
+one is not. What is left to do is below.
 
-**File:** `hydrate.py:190-209` (`fetch`, the traverse branch)
+## [HIGH] `--traverse` still has no spatial bound
+
+**File:** `hydrate.py:208-234` (`fetch`, the traverse branch)
 **Type:** Correctness — has already put bad data into OSM
-**Effort:** Small to fix, larger to clean up
+**Effort:** Small to fix
 
-`--traverse` collects `gnis_id` values from the features found in the query area,
-then re-queries each one with `{'where': f"{id_field}='{gid}'"}` — **no spatial
-argument at all**. The code comment explains why it is one request per id; what
-it does not say is that each of those requests is unbounded.
+Traverse re-queries each id it found with `{'where': f'{id_field}={lit}'}` —
+**no spatial argument at all**. Fixing the id it uses fixed *which* watercourse
+comes back; it did nothing about *how much* of it.
 
-That unboundedness causes two *different* problems, which are worth keeping
-apart because only one of them is a data-identity bug.
-
-### a) gnis_id is not unique per watercourse
-
-The header comment says "gnis_id drives `--traverse`", which assumes a GNIS id
-identifies one watercourse. For Sacramento Creek it does not:
-
-```
-NHDPlus_HR layer 3, where gnis_id='00180229'  -> 91 reaches, in two clusters:
-    61 reaches around (39, -106)   Park County, Colorado
-    30 reaches around (40,  -99)   Phelps County, Nebraska
-```
-
-The obvious objection is that Sacramento Creek drains to the South Platte, which
-really does flow into Nebraska — so perhaps these are one watercourse after all.
-The reach spacing settles it:
-
-```
-largest gap between consecutive reaches *within* either cluster:   0.033 deg
-the gap between the two clusters:                                  6.560 deg
-```
-
-A single watercourse tiles continuously along its length, which is exactly what
-each cluster does on its own. Between them is one 570 km void with no reaches at
-all. NHD's own basin classification agrees:
-
-```
-HUC8 10190001  61 reaches   South Platte Headwaters (Park County, CO)
-HUC8 10250016  30 reaches   Platte (Phelps County, NE)
-```
-
-Two unrelated creeks, in different subbasins, sharing a name and an id — so
-traversing the one near Alma drags in the one in Nebraska.
-
-**This is an upstream NHD attribution error, not a misuse of the field.** GNIS ids
-identify a *named feature*, and are deliberately not unique per reach — one creek
-is many reaches all carrying the same id, which is precisely what makes traverse
-possible. Two distinct creeks in two states and two subbasins should carry two
-distinct ids; that they do not is a defect in NHD's attribution.
-
-The conclusion that matters for the fix: **the answer is not a better id field.**
-Any identity attribute can be wrong upstream, and there is no way to tell from
-inside a query whether this particular id is one of the bad ones. The spatial
-bound has to stay on regardless of how trustworthy identity looks, because it is
-the only constraint that fails safe.
-
-The README's claim that "roughly 30% of reaches carry no GNIS id, so nothing can
-extend them" is describing the same field and is correspondingly optimistic: the
-70% that *do* carry one can extend to another state.
-
-### b) Traverse working correctly is still not what you want to upload
-
-The Arkansas River case is **not** a collision. It rises above Leadville, runs
-through Buena Vista and Salida, and genuinely flows on into Kansas and beyond, so
-a reach in Finney County really is the same river. `--traverse` following it 700 km
-is the documented behaviour working exactly as described.
+The Arkansas River is the case that identity cannot help with. It rises above
+Leadville, runs through Buena Vista and Salida, and genuinely flows on into
+Kansas and beyond, so a reach in Finney County really is the same river: one
+gnis_id, one levelpathi, 2000+ reaches, HUC4s 1102, 1103, 1106, 1111 and 0802.
+`--traverse` following it 700 km is the documented behaviour working exactly as
+described.
 
 That does not make the result uploadable. Way 1550711822 landed on top of two
 existing OSM ways for the Arkansas River in the same box (381871409 and
 1474271890, both mapped by `bisonprarieafternoon` in February 2026) — so the
 correct-but-unintended half of the traverse produced **duplicate geometry over
-another mapper's work**, which is worse than the Nebraska case rather than better.
+another mapper's work**, which is worse than the wrong-creek case rather than
+better.
 
-Traverse on a major river needs a distance or reach-count ceiling regardless of
-identity being right, and anything it returns outside the survey area needs
-checking against existing OSM before upload, not after.
+### Switching to levelpathi made the scale problem *more* reachable
 
-### Reproduction
-
-One point in Park County, 500 m radius, nothing else:
+A level path runs from a headwater to the outlet of its basin, through every
+name change on the way; a GNIS id stopped where the name stopped. So a query on
+a small tributary now returns the mainstem it drains into, which the old key
+would not have done:
 
 ```sh
-./hydrate.py query --at 39.2447,-106.1400 --radius 500            -o plain.geojson
-./hydrate.py query --at 39.2447,-106.1400 --radius 500 --traverse -o traverse.geojson
+./hydrate.py query --at 39.0681575,-106.1164971 --radius 1000            -o rich-plain.geojson
+./hydrate.py query --at 39.0681575,-106.1164971 --radius 1000 --traverse -o rich-traverse.geojson
 ```
 
 | | features | longitude extent |
 |---|---:|---|
-| without `--traverse` | 22 | −106.149 … −106.135 |
-| with `--traverse` | 104 | −106.174 … **−99.240** |
+| without `--traverse` | 33 | −106.145 … −106.093 |
+| with `--traverse` | 2212 | −106.185 … **−100.336** |
 
-30 of those 104 features have vertices east of longitude −101, every one of them
-named Sacramento Creek — matching the 30 Nebraska reaches exactly. A 1 km query
-in Park County reaches 570 km into Nebraska in one step.
+Of those 2212, **2149 are one level path** — 23001100001964, "South Fork South
+Platte River" continuing as "South Platte River", from Park County to central
+Nebraska (lat 38.903…41.155). Nothing about that is a data error; it is one
+continuous stream path, correctly identified. It is simply not what a 1 km query
+asked for. The same README example under the old key returned 244 reaches,
+because the GNIS id stopped at the name change.
 
-The chain is: the spatial query finds Sacramento Creek (CO) → traverse collects
-its `gnis_id` → traverse re-queries that id **unbounded** → NHD returns all 91
-reaches carrying it, 61 in Colorado and 30 in Nebraska → all 30 land in the
-output. Those 30 reaches become the 13 uploaded OSM ways once `merge_chains` has
-joined the contiguous ones.
+So the identity fix has, if anything, raised the priority of this one.
 
-Note the summary line says `1 named watercourse(s): Sacramento Creek` in both
-runs. Nothing in the output hints that the second run has crossed three states,
-which is why it went unnoticed until it was already in OSM.
+### What to do
 
-### It has already happened
+1. **Bound the traverse regardless of identity.** Either clip traversed geometry
+   to a generous buffer of the query area, or cap it by distance from the query
+   area or by reach count. Whatever the identity field says, a 1 km query should
+   never emit geometry three states away.
+2. **Fail loudly on a wide result.** If a traverse returns geometry more than
+   some multiple of the query radius away, refuse it and say so rather than
+   writing it into the `.osm`. Returning 2000 reaches silently is the failure
+   mode that got this into OSM in the first place.
+
+## [HIGH] 15 already-uploaded ways still need deleting from OSM
+
+**Type:** Cleanup of data already published
+**Effort:** One JOSM session
 
 Changesets **187666011** and **187666017** (2026-08-19T01:05–01:06, "Update
 wateryways along trails between Alma and BV", one JOSM upload split across two
-changesets by the 10,000-element limit) created **15 ways, ~4,554 node refs, 450–700 km
-outside the intended area**. All were still live and at version 1 when checked:
+changesets by the 10,000-element limit) created **15 ways, ~4,554 node refs,
+450–700 km outside the intended area**. All were still live and at version 1
+when checked.
 
 Enumerated by asking Overpass for every `waterway` way authored by the account in
 each region, rather than by parsing the changeset. That distinction matters: an
@@ -150,77 +112,6 @@ All `waterway=stream`, named Sacramento Creek, all v1 in changeset 187666017.
 
 Both `waterway=river`, named Arkansas River, both v1 in changeset 187666017.
 
-The changeset bounding box — 2.61° × 7.50°, reaching to longitude −98.68 — was
-the visible symptom, and is worth treating as a standing check: an upload
-described as "between Alma and BV" should never have a bbox wider than about
-half a degree.
-
-**Nothing else in these changesets is wrong.** The trail work in them is sound:
-Sheep Creek Trail now runs as a seven-way chain split at three `bridge=yes`
-crossings (1550711796 → 1550711797 → 169345446 → 1550711798 → 1550711799 →
-1550711800 → 1550711801), each pair sharing an endpoint node, which is exactly how
-a way carrying bridges should be split. An earlier pass over this data claimed two
-of those ways were duplicates; that was an artefact of the checking script
-comparing geometry assembled from only the nodes present in one of the two
-changesets, so ways whose surviving fragment was a single shared node came out
-looking identical. Partial geometry from missing nodes is its own hazard — the
-same failure mode that makes `Coords`-style "skip the nodes we don't have" helpers
-quietly dangerous.
-
-### The right traverse key is `levelpathi`
-
-NHDPlus HR's level path identifier is the set of flowlines forming one continuous
-stream path — which is exactly what "extend this watercourse to its full extent"
-means. It splits the two Sacramento Creeks cleanly:
-
-| | levelpathi | reaches |
-|---|---|---|
-| Park County, CO | 23001900023955 | 61 |
-| Phelps County, NE | 23001600008870 | 30 |
-
-Three things make it the right choice rather than merely a working one:
-
-- **The query shape already works.** `where=levelpathi=23001900023955` is the same
-  single-equality form the code found passes from Python, so it sidesteps the
-  `IN (...)`/`OR` rejection documented in `fetch`. Verified against the live
-  service; no quoting, the field is numeric.
-- **It returns *more* than gnis_id, not less.** The Colorado query gives 62 reaches
-  where gnis_id gives 61 — it picks up an unnamed reach on the same path. Level
-  path is a network property rather than a name property, so it extends through
-  unnamed reaches too. That partly answers the README's note that "roughly 30% of
-  reaches carry no GNIS id, so nothing can extend them".
-- **Its extent is right.** The Colorado level path spans lon −106.174…−106.026,
-  lat 39.223…39.248. Entirely Park County. No Nebraska.
-
-The other fields that happen to split this case are the wrong tools. `vpuid`,
-`terminalpa` and the HUC8 prefix of `reachcode` are all processing or basin
-boundaries: they would wrongly cut a creek that crosses one, and would fail to
-separate two same-named creeks that sit inside one. They partition correctly here
-by coincidence of geography.
-
-### …but it does not solve the Arkansas River
-
-Querying every reach named Arkansas River returns **one gnis_id, one levelpathi,
-2000+ reaches**, spanning HUC4s 1102, 1103, 1106, 1111 and 0802 — Colorado through
-Kansas, Oklahoma and Arkansas. That is correct: it really is one continuous river
-on one level path.
-
-So the two failures are orthogonal and need separate fixes:
-
-1. **Identity — switch the traverse key from `gnis_id` to `levelpathi`.** Fixes
-   Nebraska. Collect level path ids from the spatially-found features instead of
-   GNIS ids, and traverse those.
-2. **Scale — bound the traverse regardless of identity.** Fixes Kansas, which
-   correct identity does nothing for. Either clip traversed geometry to a generous
-   buffer of the query area, or cap it by distance from the query area or by reach
-   count, and refuse rather than silently returning 2000 reaches. Whatever the
-   identity field says, a 1 km query should never emit geometry three states away.
-3. **Fail loudly on a wide result.** If a traverse returns geometry more than
-   some multiple of the query radius away, that is a bug, not a long river —
-   refuse it and say so rather than writing it into the `.osm`.
-4. **Correct the README.** The `--traverse` section describes the GNIS id as
-   identifying a named watercourse; it identifies a name, nationwide.
-
 ### The two cases need removing for different reasons
 
 Verified against the live OSM API rather than by re-parsing the changeset: all 15
@@ -231,7 +122,7 @@ Kansas and their nodes created across 187666011/187666017. They are real.
 covered that stretch of river, mapped by another contributor in February. This is
 the clear-cut one.
 
-**Nebraska (11 Sacramento Creek ways)** — *not* duplicate. Checking the box shows
+**Nebraska (Sacramento Creek ways)** — *not* duplicate. Checking the box shows
 only two pre-existing waterway ways, neither of them this creek, so the import
 added genuinely new and probably accurate USGS geometry. The geometry is not the
 problem; the provenance is. It is an unreviewed bulk import into a region nobody
@@ -246,17 +137,29 @@ watched.
 So: remove both sets, but do not describe the Nebraska one as fixing bad data. It
 is withdrawing data that was never yours to add.
 
-### Cleanup
+### How
 
-The 15 ways above and their nodes want deleting. In JOSM: *File → Download object*,
-type `way`, paste the ids with "download referrers" off, then delete the selection
-and upload with a comment explaining the revert (a plain "revert of accidental
-out-of-area import from changesets 187666011/187666017" is exactly right, and
-being the original author makes this uncontroversial).
+In JOSM: *File → Download object*, type `way`, paste the ids with "download
+referrers" off, then delete the selection and upload with a comment explaining
+the revert (a plain "revert of accidental out-of-area import from changesets
+187666011/187666017" is exactly right, and being the original author makes this
+uncontroversial).
 
 Worth checking changeset **187617028** ("Update waterways around Rich Creek
 Trailhead", 1,699 changes) the same way before assuming it is clean — its bbox is
 tight at 0.17° × 0.13°, which is a good sign but not proof.
+
+**Nothing else in these changesets is wrong.** The trail work in them is sound:
+Sheep Creek Trail now runs as a seven-way chain split at three `bridge=yes`
+crossings (1550711796 → 1550711797 → 169345446 → 1550711798 → 1550711799 →
+1550711800 → 1550711801), each pair sharing an endpoint node, which is exactly how
+a way carrying bridges should be split. An earlier pass over this data claimed two
+of those ways were duplicates; that was an artefact of the checking script
+comparing geometry assembled from only the nodes present in one of the two
+changesets, so ways whose surviving fragment was a single shared node came out
+looking identical. Partial geometry from missing nodes is its own hazard — the
+same failure mode that makes `Coords`-style "skip the nodes we don't have" helpers
+quietly dangerous.
 
 ## [MEDIUM] Nothing warns when an upload is about to span a continent
 
@@ -267,4 +170,90 @@ tight at 0.17° × 0.13°, which is a good sign but not proof.
 bounding box of what it is about to write, which is the one number that would
 have made the above obvious before it reached OSM rather than after.
 
-Print the output bbox and its diagonal, and warn above some threshold.
+Print the output bbox and its diagonal, and warn above some threshold. The
+changeset bounding box — 2.61° × 7.50°, reaching to longitude −98.68 — was the
+visible symptom, and is worth treating as a standing check: an upload described
+as "between Alma and BV" should never have a bbox wider than about half a degree.
+
+## Done
+
+### `--traverse` followed gnis_id, which is a name and not a watercourse
+
+Fixed: the traverse key is now `levelpathi` (`levelpath` for `--source 3dhp`).
+
+The header comment used to say "gnis_id drives `--traverse`", which assumes a
+GNIS id identifies one watercourse. For Sacramento Creek it does not:
+
+```
+NHDPlus_HR layer 3, where gnis_id='00180229'  -> 91 reaches, in two clusters:
+    61 reaches around (39, -106)   Park County, Colorado
+    30 reaches around (40,  -99)   Phelps County, Nebraska
+```
+
+The objection that Sacramento Creek drains to the South Platte, which really does
+flow into Nebraska, is settled by the reach spacing: the largest gap between
+consecutive reaches *within* either cluster is 0.033°, the gap between the two
+clusters is 6.560°. A single watercourse tiles continuously along its length,
+which is what each cluster does on its own; between them is one 570 km void with
+no reaches at all. NHD's own basin classification agrees — HUC8 10190001 (South
+Platte Headwaters, 61 reaches) and HUC8 10250016 (Platte, 30 reaches). Two
+unrelated creeks sharing a name and an id.
+
+This is an upstream NHD attribution error rather than a misuse of the field: GNIS
+ids identify a *named feature* and are deliberately not unique per reach, which is
+exactly what made traverse possible in the first place. But it means identity by
+name cannot be trusted, and nothing inside a query can tell you whether this
+particular id is one of the bad ones.
+
+`levelpathi` is the set of flowlines forming one continuous stream path, which is
+what "extend this watercourse to its full extent" actually means. It splits the
+two creeks cleanly, and it is a property of the routed network rather than of the
+name, so it extends unnamed reaches too — the Colorado path returns 62 reaches
+where the GNIS id returned 61, picking up an unnamed one. Only the network
+flowline layers carry it (NHDPlus layer 3, 3DHP layer 50), which is where the
+`outFields` entries were added. The query shape is the single-equality form that
+`fetch` documents as the only one that passes from Python; the field is numeric,
+so the literal is unquoted.
+
+| | levelpathi | reaches |
+|---|---|---|
+| Park County, CO | 23001900023955 | 62 |
+| Phelps County, NE | 23001600008870 | 30 |
+
+The other fields that happen to split this case are the wrong tools. `vpuid`,
+`terminalpa` and the HUC8 prefix of `reachcode` are all processing or basin
+boundaries: they would wrongly cut a creek that crosses one, and would fail to
+separate two same-named creeks that sit inside one. They partition correctly here
+by coincidence of geography.
+
+`--source 3dhp` carries the same idea as `levelpath` on its Flowline layer, and it
+splits the same case: 3DHP `gnisid=180229` is 91 reaches over three level paths —
+29193282 (61, Colorado), 2030761 (9) and 1306 (21 of its 29 nationwide reaches, in
+the Nebraska cluster). Each level path is one tight cluster, so 3DHP is fixed by
+the same change.
+
+#### Reproduction, before and after
+
+One point in Park County, 500 m radius, nothing else:
+
+```sh
+./hydrate.py query --at 39.2447,-106.1400 --radius 500            -o plain.geojson
+./hydrate.py query --at 39.2447,-106.1400 --radius 500 --traverse -o traverse.geojson
+```
+
+| | features | longitude extent | features east of −101 |
+|---|---:|---|---:|
+| without `--traverse` | 22 | −106.149 … −106.135 | 0 |
+| with `--traverse`, gnis_id | 104 | −106.174 … **−99.240** | 30 |
+| with `--traverse`, levelpathi | 80 | −106.174 … −106.026 | 0 |
+
+The 30 out-of-area features were every one of them named Sacramento Creek,
+matching the 30 Nebraska reaches exactly; they became 13 of the uploaded OSM ways
+once `merge_chains` had joined the contiguous ones. After the fix the traverse
+run stays inside Park County (lat 39.223…39.256) while still returning nearly
+four times the unextended result, so the feature still does its job.
+
+Note that the summary line said `1 named watercourse(s): Sacramento Creek` in
+both of the old runs. Nothing in the output hinted that the second had crossed
+three states, which is why it went unnoticed until it was already in OSM — the
+`convert` bbox warning above is the missing check.

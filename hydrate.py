@@ -29,19 +29,31 @@ NHDPLUS = 'https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServ
 DHP = 'https://hydro.nationalmap.gov/arcgis/rest/services/3DHP_all/MapServer'
 WBD = f'{NHDPLUS}/12'          # watershed boundaries (HUC12)
 
-# layer -> fields. gnis_id drives --traverse; nhdplusid is the dedup key.
+# layer -> fields. The last element of each tuple is the field --traverse
+# follows; nhdplusid/id3dhp is the dedup key.
+#
+# Traverse follows the *level path* (`levelpathi` in NHDPlus HR, `levelpath` in
+# 3DHP), the set of flowlines making up one continuous stream path, and not the
+# GNIS id. A GNIS id names a feature rather than identifying one, and NHD hands
+# the same id to distinct watercourses that share a name: gnis_id='00180229' is
+# 91 reaches in two clusters 570 km apart, 61 on Sacramento Creek in Park
+# County CO and 30 on an unrelated Sacramento Creek in Phelps County NE, so
+# traversing by name dragged Nebraska into a 500 m Colorado query. Level path
+# is a network property, so it also extends reaches that carry no name at all.
+# Only the network flowline layers carry it, which is why it appears in one
+# layer's fields per source.
 SOURCES = {
     'nhdplus': (NHDPLUS, {
         2: 'nhdplusid,gnis_id,gnis_name,ftype,fcode',
-        3: 'nhdplusid,gnis_id,gnis_name,ftype,fcode,qama,totdasqkm,streamorde,slope,lengthkm',
+        3: 'nhdplusid,gnis_id,gnis_name,ftype,fcode,qama,totdasqkm,streamorde,slope,lengthkm,levelpathi',
         4: 'nhdplusid,gnis_id,gnis_name,ftype,fcode,lengthkm',
         9: 'nhdplusid,gnis_id,gnis_name,ftype,fcode,areasqkm',
-    }, 3, 'gnis_id'),
+    }, 3, 'levelpathi'),
     '3dhp': (DHP, {
         20: 'id3dhp,gnisid,gnisidlabel,featuretypelabel',
-        50: 'id3dhp,gnisid,gnisidlabel,featuretypelabel',
+        50: 'id3dhp,gnisid,gnisidlabel,featuretypelabel,levelpath',
         60: 'id3dhp,gnisid,gnisidlabel,featuretypelabel',
-    }, 50, 'gnisid'),
+    }, 50, 'levelpath'),
 }
 
 PAGE = 2000                    # maxRecordCount on these services
@@ -181,6 +193,18 @@ def feature_key(f):
     return ('geom', json.dumps(f['geometry']['coordinates'])[:200])
 
 
+def id_literal(value):
+    """Render an id as a SQL literal: level paths are numeric, so no quotes.
+
+    ArcGIS types levelpathi as a double and hands it back as a JSON number, so
+    it must go into the where clause unquoted and without the exponent or
+    trailing `.0` that str() would give a float.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return format(int(value), 'd')
+    return str(value) if isinstance(value, (int, float)) else f"'{value}'"
+
+
 def fetch(source, spatial, traverse=False, ephemeral='keep'):
     base, layers, flow_layer, id_field = SOURCES[source]
     feats = []
@@ -188,10 +212,10 @@ def fetch(source, spatial, traverse=False, ephemeral='keep'):
         feats.extend(query_layer(base, layer, fields, spatial))
 
     if traverse:
-        ids = sorted({str(f['properties'][id_field]) for f in feats
-                      if f['properties'].get(id_field)})
+        found = [f['properties'].get(id_field) for f in feats]
+        ids = sorted({id_literal(v) for v in found if v not in (None, '')})
         if ids:
-            print(f'traversing {len(ids)} named watercourse(s)...', file=sys.stderr)
+            print(f'traversing {len(ids)} stream path(s)...', file=sys.stderr)
             # One query per id, using plain equality. A single `IN (...)` would
             # be the obvious way to do this, and it is what curl gets away with,
             # but from Python it returns 403 every time.
@@ -199,14 +223,15 @@ def fetch(source, spatial, traverse=False, ephemeral='keep'):
             # Established by testing: the body curl sends is byte-identical to
             # urlencode's, and the rejection survives every header combination,
             # both HTTP versions, and ALPN on or off. It is not throttling - it
-            # reproduces. `field='value'` passes from Python where `IN (...)`
-            # and `OR` do not, so the trigger is a SQL-injection heuristic that
-            # weights the client's TLS fingerprint. Not worth fighting: there
-            # are only ever a handful of named watercourses in a query, so
-            # issuing one request each costs little and works from any client.
-            for gid in ids:
+            # reproduces. A single `field=value` passes from Python where
+            # `IN (...)` and `OR` do not, so the trigger is a SQL-injection
+            # heuristic that weights the client's TLS fingerprint. Not worth
+            # fighting: there are only ever a handful of stream paths in a
+            # query, so issuing one request each costs little and works from
+            # any client.
+            for lit in ids:
                 feats.extend(query_layer(base, flow_layer, layers[flow_layer],
-                                         {'where': f"{id_field}='{gid}'"}))
+                                         {'where': f'{id_field}={lit}'}))
 
     kept, seen, dropped = [], set(), 0
     for f in feats:
@@ -577,7 +602,7 @@ def main():
     q.add_argument('--radius', type=float, default=1000,
                    help='metres from the point or track (default 1000)')
     q.add_argument('--traverse', action='store_true',
-                   help='extend named watercourses to their full extent')
+                   help='extend each reach found to its whole stream path')
     q.add_argument('--ephemeral', choices=('keep', 'drop'),
                    help='reaches that only run after rain '
                         '(default: keep for --at/--track, drop for --huc)')

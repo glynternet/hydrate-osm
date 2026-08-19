@@ -51,12 +51,26 @@ you've checked into a downloaded OSM layer.
 ./hydrate.py query --at LAT,LON --radius 1000 --traverse -o here.geojson
 ```
 
-`--traverse` extends each *named* watercourse to its full extent instead of
+`--traverse` extends each reach found to its whole *stream path* — the chain of
+flowlines NHD groups under one `levelpathi`, or `levelpath` in 3DHP — instead of
 slicing it at the search radius, so ways end at confluences rather than at an
-arbitrary circle edge. Expect it to multiply the result: one 1 km query near
-Rich Creek goes from 23 reaches to 244, because the South Fork South Platte
-alone is 184 reaches over 72 km. Unnamed reaches stay clipped — roughly 30% of
-reaches carry no GNIS id, so nothing can extend them.
+arbitrary circle edge. Unnamed reaches extend too: a level path is a property of
+the routed network, not of the name.
+
+It deliberately does not follow the GNIS id. A GNIS id names a feature rather
+than identifying one, and NHD hands the same id to distinct watercourses that
+share a name — `gnis_id='00180229'` is two unrelated Sacramento Creeks, one in
+Park County CO and one 570 km away in Phelps County NE — so traversing by name
+put Nebraska geometry into a 500 m Colorado query, and then into OSM.
+
+Expect traverse to multiply the result, and check the extent of what comes back
+before converting it. A level path runs from a headwater to the outlet of its
+basin, through every name change on the way, so a query on a small tributary can
+return the mainstem it drains into: the 1 km query above near Rich Creek goes
+from 33 features to 2,212, because the reach of the South Fork South Platte it
+touches shares a level path with the South Platte River — 2,149 reaches, running
+from Park County to central Nebraska. Traverse is bounded by identity only.
+Nothing yet clips it back to the area you asked about.
 
 **A route** — everything within reach of a GPX track.
 
@@ -416,8 +430,8 @@ in NHDPlus. Only network flowlines reliably carry GNIS ids.
 are rejected from Python while succeeding from curl, with a byte-identical
 request body and across every header, HTTP version and ALPN combination — so
 the trigger appears to be an injection heuristic weighted by TLS fingerprint.
-Plain `field='value'` passes from anywhere, which is why `--traverse` issues one
-query per id rather than a single `IN`.
+A single `field=value` passes from anywhere, which is why `--traverse` issues
+one query per id rather than a single `IN`.
 
 **Paging.** `maxRecordCount` is 2000. Watch `exceededTransferLimit`; this tool
 pages automatically, but anything you write by hand against the API should too.
@@ -446,6 +460,7 @@ value of `NHD` means that area is not lidar-derived yet.
 | drainage area | `totdasqkm` | absent (announced as future) |
 | slope | `slope` | absent |
 | Strahler order | `streamorde` | `streamorder` |
+| stream path (what `--traverse` follows) | `levelpathi` | `levelpath` |
 | network navigation | VAAs | Flow Network Derivatives |
 
 The perennial/intermittent split is why NHDPlus is the default. 3DHP has no
