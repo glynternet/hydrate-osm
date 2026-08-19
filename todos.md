@@ -83,23 +83,44 @@ checking against existing OSM before upload, not after.
 
 Changesets **187666011** and **187666017** (2026-08-19T01:05–01:06, "Update
 wateryways along trails between Alma and BV", one JOSM upload split across two
-changesets by the 10,000-element limit) created **12 ways, ~4,543 nodes, 450–700 km
+changesets by the 10,000-element limit) created **15 ways, ~4,554 node refs, 450–700 km
 outside the intended area**. All were still live and at version 1 when checked:
 
-| way | name | nodes | location |
-|---|---|---|---|
-| 1550711822 | Arkansas River | 103 | 37.857, -100.577 — Finney County, KS |
-| 1550711823 | Sacramento Creek | 4 | 40.392, -99.260 — Nebraska |
-| 1550711826 | Sacramento Creek | 1833 | 40.448, -99.364 |
-| 1550711829 | Sacramento Creek | 1188 | 40.409, -99.271 |
-| 1550711832 | Sacramento Creek | 107 | 40.445, -99.459 |
-| 1550711836 | Sacramento Creek | 132 | 40.438, -99.467 |
-| 1550711842 | Sacramento Creek | 340 | 40.426, -99.299 |
-| 1550711854 | Sacramento Creek | 8 | 40.429, -99.288 |
-| 1550711857 | Sacramento Creek | 6 | 40.445, -99.461 |
-| 1550711858 | Sacramento Creek | 6 | 40.457, -99.436 |
-| 1550711862 | Sacramento Creek | 350 | 40.452, -99.447 |
-| 1550711874 | Sacramento Creek | 466 | 40.383, -99.255 |
+Enumerated by asking Overpass for every `waterway` way authored by the account in
+each region, rather than by parsing the changeset. That distinction matters: an
+earlier pass that computed way centroids from the changeset file undercounted by
+three, because those ways' nodes live in the *sibling* changeset and so had no
+coordinates to average. Anything derived from one half of a split upload is
+partial by construction.
+
+**Nebraska — 13 ways, 4,445 node refs, around 40.42, −99.36 (Phelps County):**
+
+| way | nodes |
+|---|---|
+| [1550711823](https://www.openstreetmap.org/way/1550711823) | 4 |
+| [1550711826](https://www.openstreetmap.org/way/1550711826) | 1833 |
+| [1550711829](https://www.openstreetmap.org/way/1550711829) | 1188 |
+| [1550711832](https://www.openstreetmap.org/way/1550711832) | 107 |
+| [1550711836](https://www.openstreetmap.org/way/1550711836) | 132 |
+| [1550711842](https://www.openstreetmap.org/way/1550711842) | 340 |
+| [1550711847](https://www.openstreetmap.org/way/1550711847) | 3 |
+| [1550711849](https://www.openstreetmap.org/way/1550711849) | 2 |
+| [1550711854](https://www.openstreetmap.org/way/1550711854) | 8 |
+| [1550711857](https://www.openstreetmap.org/way/1550711857) | 6 |
+| [1550711858](https://www.openstreetmap.org/way/1550711858) | 6 |
+| [1550711862](https://www.openstreetmap.org/way/1550711862) | 350 |
+| [1550711874](https://www.openstreetmap.org/way/1550711874) | 466 |
+
+All `waterway=stream`, named Sacramento Creek, all v1 in changeset 187666017.
+
+**Kansas — 2 ways, 109 node refs, around 37.86, −100.59 (Finney County):**
+
+| way | nodes |
+|---|---|
+| [1550711822](https://www.openstreetmap.org/way/1550711822) | 103 |
+| [1550711853](https://www.openstreetmap.org/way/1550711853) | 6 |
+
+Both `waterway=river`, named Arkansas River, both v1 in changeset 187666017.
 
 The changeset bounding box — 2.61° × 7.50°, reaching to longitude −98.68 — was
 the visible symptom, and is worth treating as a standing check: an upload
@@ -135,7 +156,7 @@ quietly dangerous.
 
 ### The two cases need removing for different reasons
 
-Verified against the live OSM API rather than by re-parsing the changeset: all 12
+Verified against the live OSM API rather than by re-parsing the changeset: all 15
 ways are version 1, changeset 187666017, with their first nodes in Nebraska and
 Kansas and their nodes created across 187666011/187666017. They are real.
 
@@ -160,7 +181,7 @@ is withdrawing data that was never yours to add.
 
 ### Cleanup
 
-The 12 ways above and their nodes want deleting. In JOSM: *File → Download object*,
+The 15 ways above and their nodes want deleting. In JOSM: *File → Download object*,
 type `way`, paste the ids with "download referrers" off, then delete the selection
 and upload with a comment explaining the revert (a plain "revert of accidental
 out-of-area import from changesets 187666011/187666017" is exactly right, and
