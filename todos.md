@@ -167,15 +167,54 @@ looking identical. Partial geometry from missing nodes is its own hazard — the
 same failure mode that makes `Coords`-style "skip the nodes we don't have" helpers
 quietly dangerous.
 
-### Fix
+### The right traverse key is `levelpathi`
 
-1. **Keep the spatial filter on traverse queries.** Pass the original `spatial`
-   alongside the where clause, or intersect the traversed result against a
-   generous buffer of the query area before returning it. Traverse is meant to
-   follow a watercourse past the edge of a circle, not across the country.
-2. **Do not rely on gnis_id for identity.** It is a name key. Where a true
-   per-feature identity is needed, `nhdplusid` (already used as the dedup key) is
-   the one that is unique.
+NHDPlus HR's level path identifier is the set of flowlines forming one continuous
+stream path — which is exactly what "extend this watercourse to its full extent"
+means. It splits the two Sacramento Creeks cleanly:
+
+| | levelpathi | reaches |
+|---|---|---|
+| Park County, CO | 23001900023955 | 61 |
+| Phelps County, NE | 23001600008870 | 30 |
+
+Three things make it the right choice rather than merely a working one:
+
+- **The query shape already works.** `where=levelpathi=23001900023955` is the same
+  single-equality form the code found passes from Python, so it sidesteps the
+  `IN (...)`/`OR` rejection documented in `fetch`. Verified against the live
+  service; no quoting, the field is numeric.
+- **It returns *more* than gnis_id, not less.** The Colorado query gives 62 reaches
+  where gnis_id gives 61 — it picks up an unnamed reach on the same path. Level
+  path is a network property rather than a name property, so it extends through
+  unnamed reaches too. That partly answers the README's note that "roughly 30% of
+  reaches carry no GNIS id, so nothing can extend them".
+- **Its extent is right.** The Colorado level path spans lon −106.174…−106.026,
+  lat 39.223…39.248. Entirely Park County. No Nebraska.
+
+The other fields that happen to split this case are the wrong tools. `vpuid`,
+`terminalpa` and the HUC8 prefix of `reachcode` are all processing or basin
+boundaries: they would wrongly cut a creek that crosses one, and would fail to
+separate two same-named creeks that sit inside one. They partition correctly here
+by coincidence of geography.
+
+### …but it does not solve the Arkansas River
+
+Querying every reach named Arkansas River returns **one gnis_id, one levelpathi,
+2000+ reaches**, spanning HUC4s 1102, 1103, 1106, 1111 and 0802 — Colorado through
+Kansas, Oklahoma and Arkansas. That is correct: it really is one continuous river
+on one level path.
+
+So the two failures are orthogonal and need separate fixes:
+
+1. **Identity — switch the traverse key from `gnis_id` to `levelpathi`.** Fixes
+   Nebraska. Collect level path ids from the spatially-found features instead of
+   GNIS ids, and traverse those.
+2. **Scale — bound the traverse regardless of identity.** Fixes Kansas, which
+   correct identity does nothing for. Either clip traversed geometry to a generous
+   buffer of the query area, or cap it by distance from the query area or by reach
+   count, and refuse rather than silently returning 2000 reaches. Whatever the
+   identity field says, a 1 km query should never emit geometry three states away.
 3. **Fail loudly on a wide result.** If a traverse returns geometry more than
    some multiple of the query radius away, that is a bug, not a long river —
    refuse it and say so rather than writing it into the `.osm`.
