@@ -163,6 +163,32 @@ understates the high-water width OSM asks you to judge by.
 You now have a scratch layer (the import) and an upload layer (real OSM). Only
 what you deliberately copy across ever reaches the upload.
 
+**Download the upload layer from the live API, not from an extract.** BBBike and
+Geofabrik extracts are cut from planet dumps on a schedule, so the file is hours
+to days behind live OSM however recently you fetched it — you will collide with
+whoever edited in between. Two further problems make this a firm rule rather
+than a preference:
+
+- **Clipped ways.** A way running past the extract boundary may be present only
+  as the portion inside it, and a plain `.osm` file cannot say "this is
+  truncated". Modify it, upload, and you delete every node outside the extract.
+  Version checking will not catch this: if nobody else touched that way its
+  version still matches, so the damage uploads cleanly under your name.
+- **Update data does not work on them.** It re-downloads the area the layer
+  covers, and an extract covers a whole region. The API caps a download at
+  0.25 square degrees, so it just refuses.
+
+Extracts are good for reference and analysis. For anything you intend to upload,
+use **File → Download from OSM** (`Ctrl+Shift+D`) over a small bbox.
+
+Uploading never reverts OSM wholesale — only objects you created, modified or
+deleted are sent, and the API rejects any whose version has moved on, which is
+what raises the conflict dialog. But it will not save you from resolving a
+conflict by taking your version and discarding someone else's work. Keep the
+window small: download immediately before editing, upload promptly after, and
+split large jobs into per-watercourse changesets so there is less time and less
+surface for anyone else to have touched the same objects.
+
 ### Copy across what you have reviewed
 
 Select reviewed features in the import layer, `Ctrl+C`, switch to the OSM layer,
