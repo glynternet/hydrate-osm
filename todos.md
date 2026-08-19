@@ -79,6 +79,34 @@ Traverse on a major river needs a distance or reach-count ceiling regardless of
 identity being right, and anything it returns outside the survey area needs
 checking against existing OSM before upload, not after.
 
+### Reproduction
+
+One point in Park County, 500 m radius, nothing else:
+
+```sh
+./hydrate.py query --at 39.2447,-106.1400 --radius 500            -o plain.geojson
+./hydrate.py query --at 39.2447,-106.1400 --radius 500 --traverse -o traverse.geojson
+```
+
+| | features | longitude extent |
+|---|---:|---|
+| without `--traverse` | 22 | −106.149 … −106.135 |
+| with `--traverse` | 104 | −106.174 … **−99.240** |
+
+30 of those 104 features have vertices east of longitude −101, every one of them
+named Sacramento Creek — matching the 30 Nebraska reaches exactly. A 1 km query
+in Park County reaches 570 km into Nebraska in one step.
+
+The chain is: the spatial query finds Sacramento Creek (CO) → traverse collects
+its `gnis_id` → traverse re-queries that id **unbounded** → NHD returns all 91
+reaches carrying it, 61 in Colorado and 30 in Nebraska → all 30 land in the
+output. Those 30 reaches become the 13 uploaded OSM ways once `merge_chains` has
+joined the contiguous ones.
+
+Note the summary line says `1 named watercourse(s): Sacramento Creek` in both
+runs. Nothing in the output hints that the second run has crossed three states,
+which is why it went unnoticed until it was already in OSM.
+
 ### It has already happened
 
 Changesets **187666011** and **187666017** (2026-08-19T01:05–01:06, "Update
