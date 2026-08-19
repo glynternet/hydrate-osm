@@ -189,6 +189,45 @@ window small: download immediately before editing, upload promptly after, and
 split large jobs into per-watercourse changesets so there is less time and less
 surface for anyone else to have touched the same objects.
 
+### When the download area is too large
+
+JOSM refusing a download is what sends most people to an extract, so deal with
+it directly instead.
+
+**First, check whether it really is too large.** The API caps a single download
+at **0.25 square degrees** and around **50,000 nodes**. Under-mapped rural
+country is node-sparse, so an area that feels big often is not: the Rich Creek
+HUC12 is 132 km2, which works out at 0.026 square degrees — a tenth of the
+limit — holding under 17,000 nodes. It downloads in one request. If JOSM
+complained, check what you actually selected; refreshing a layer that came from
+a region-sized file will fail even though the area you care about would not.
+
+When it genuinely is too large, in order of preference:
+
+**Download along a track.** With a GPX loaded, JOSM's *Download along* action
+splits the corridor into API-sized chunks and fetches them all. This pairs
+directly with `query --track`: same GPX, same corridor, and you pull data only
+where you will actually edit.
+
+**Several adjacent bboxes into one layer.** Download, pan, download again into
+the *same* layer — JOSM merges them. Unglamorous, completely current, and it
+keeps you honest about how much you are taking on.
+
+**Overpass, via the download dialog.** JOSM's download window has an Overpass
+tab beside the OSM one. Overpass runs about a minute behind live rather than
+days, and lets you filter, so you can pull just waterways and highways across a
+wide area instead of everything.
+
+Treat filtered Overpass results with the same caution as an extract, though:
+asking for waterways only means the roads they cross are absent, and objects
+arrive without their parent relations. That is fine for reference and riskier
+for editing, because JOSM cannot always tell what it was not given. Edit only
+objects you know you downloaded whole.
+
+Needing a large download is usually a sign the changeset is heading for too big
+anyway. Per-watercourse changesets keep the download small, the review
+tractable, and the conflict window short, all at once.
+
 ### Copy across what you have reviewed
 
 Select reviewed features in the import layer, `Ctrl+C`, switch to the OSM layer,
