@@ -51,26 +51,39 @@ you've checked into a downloaded OSM layer.
 ./hydrate.py query --at LAT,LON --radius 1000 --traverse -o here.geojson
 ```
 
-`--traverse` extends each reach found to its whole *stream path* — the chain of
-flowlines NHD groups under one `levelpathi`, or `levelpath` in 3DHP — instead of
+`--traverse` extends each watercourse found to its whole length instead of
 slicing it at the search radius, so ways end at confluences rather than at an
-arbitrary circle edge. Unnamed reaches extend too: a level path is a property of
-the routed network, not of the name.
+arbitrary circle edge. Unnamed reaches extend too, which is worth having: about
+30% of reaches carry no name, and they are mostly the headwaters.
 
-It deliberately does not follow the GNIS id. A GNIS id names a feature rather
-than identifying one, and NHD hands the same id to distinct watercourses that
-share a name — `gnis_id='00180229'` is two unrelated Sacramento Creeks, one in
-Park County CO and one 570 km away in Phelps County NE — so traversing by name
-put Nebraska geometry into a 500 m Colorado query, and then into OSM.
+It works on the routed network rather than on names. Each reach found is fetched
+along with its whole *stream path* — the chain of flowlines NHD groups under one
+`levelpathi`, or `levelpath` in 3DHP — and the path is then walked outwards from
+the reaches actually found, stopping where the name changes.
 
-Expect traverse to multiply the result, and check the extent of what comes back
-before converting it. A level path runs from a headwater to the outlet of its
-basin, through every name change on the way, so a query on a small tributary can
-return the mainstem it drains into: the 1 km query above near Rich Creek goes
-from 33 features to 2,212, because the reach of the South Fork South Platte it
-touches shares a level path with the South Platte River — 2,149 reaches, running
-from Park County to central Nebraska. Traverse is bounded by identity only.
-Nothing yet clips it back to the area you asked about.
+Both halves are load-bearing, and each fixes a way the other overshoots:
+
+- Names alone are ambiguous. A GNIS id names a feature rather than identifying
+  one, and NHD gives the same id to distinct watercourses that share a name:
+  `gnis_id='00180229'` is two unrelated Sacramento Creeks, one in Park County CO
+  and one 570 km away in Phelps County NE. Traversing by name put Nebraska
+  geometry into a 500 m Colorado query, and then into OSM.
+- Paths alone are too long. A level path runs from a headwater to the outlet of
+  its basin, through every name change on the way, so a small tributary drags in
+  the mainstem it drains into. The 1 km Rich Creek query below touches the South
+  Fork South Platte, whose path continues as the South Platte River: 2,149
+  reaches ending in central Nebraska.
+
+Walking the network gets both, and gets the unnamed reaches right as a side
+effect. The unnamed reaches on a path are not one stretch — asking for all of
+them returns fragments scattered along its whole length — but a walk from an
+unnamed headwater stops at the first named reach and stays where it started.
+
+Expect traverse to multiply the result: the 1 km query near Rich Creek goes from
+33 features to 246, because the South Fork South Platte alone is 184 reaches over
+72 km. Check the extent of what comes back before converting it. A long river is
+still a long river — traverse stops where a watercourse ends, not where your
+query area does, and nothing yet clips it back.
 
 **A route** — everything within reach of a GPX track.
 

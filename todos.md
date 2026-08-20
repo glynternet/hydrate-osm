@@ -2,7 +2,10 @@
 
 `--traverse` published data into OSM 570 km outside the survey area. That had two
 independent causes; **the identity one is fixed** (see [Done](#done)), the scale
-one is not. What is left to do is below.
+one is deliberately deferred — loading a long river into JOSM and deleting the
+segments that already exist is an acceptable workflow, *provided you can see what
+came back*, which makes the bbox warning below the thing that actually supports
+it. What is left to do is below.
 
 ## [HIGH] `--traverse` still has no spatial bound
 
@@ -10,9 +13,11 @@ one is not. What is left to do is below.
 **Type:** Correctness — has already put bad data into OSM
 **Effort:** Small to fix
 
-Traverse re-queries each id it found with `{'where': f'{id_field}={lit}'}` —
-**no spatial argument at all**. Fixing the id it uses fixed *which* watercourse
-comes back; it did nothing about *how much* of it.
+Traverse fetches each level path it found with `{'where': f'{path_field}={lit}'}`
+— **no spatial argument at all** — and then walks it. Fixing what it follows
+fixed *which* watercourse comes back, and walking it fixed *where along that
+watercourse* it stops. Neither bounds the result to the area you asked about: a
+watercourse can simply be longer than your query.
 
 The Arkansas River is the case that identity cannot help with. It rises above
 Leadville, runs through Buena Vista and Salida, and genuinely flows on into
@@ -27,32 +32,6 @@ existing OSM ways for the Arkansas River in the same box (381871409 and
 correct-but-unintended half of the traverse produced **duplicate geometry over
 another mapper's work**, which is worse than the wrong-creek case rather than
 better.
-
-### Switching to levelpathi made the scale problem *more* reachable
-
-A level path runs from a headwater to the outlet of its basin, through every
-name change on the way; a GNIS id stopped where the name stopped. So a query on
-a small tributary now returns the mainstem it drains into, which the old key
-would not have done:
-
-```sh
-./hydrate.py query --at 39.0681575,-106.1164971 --radius 1000            -o rich-plain.geojson
-./hydrate.py query --at 39.0681575,-106.1164971 --radius 1000 --traverse -o rich-traverse.geojson
-```
-
-| | features | longitude extent |
-|---|---:|---|
-| without `--traverse` | 33 | −106.145 … −106.093 |
-| with `--traverse` | 2212 | −106.185 … **−100.336** |
-
-Of those 2212, **2149 are one level path** — 23001100001964, "South Fork South
-Platte River" continuing as "South Platte River", from Park County to central
-Nebraska (lat 38.903…41.155). Nothing about that is a data error; it is one
-continuous stream path, correctly identified. It is simply not what a 1 km query
-asked for. The same README example under the old key returned 244 reaches,
-because the GNIS id stopped at the name change.
-
-So the identity fix has, if anything, raised the priority of this one.
 
 ### What to do
 
