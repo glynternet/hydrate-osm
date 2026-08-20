@@ -29,37 +29,17 @@ NHDPLUS = 'https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServ
 DHP = 'https://hydro.nationalmap.gov/arcgis/rest/services/3DHP_all/MapServer'
 WBD = f'{NHDPLUS}/12'          # watershed boundaries (HUC12)
 
-# layer -> fields, then the flow layer, then the fields --traverse needs: the
-# path it fetches by, the name it stops at, and the three that let it walk the
-# network. nhdplusid/id3dhp is the dedup key.
+# Per source: the service, layer -> fields to request, and the field names
+# --traverse needs, since the two schemas spell them differently.
 #
-# Traverse follows the *level path* (`levelpathi` in NHDPlus HR, `levelpath` in
-# 3DHP), the set of flowlines making up one continuous stream path, and not the
-# GNIS id. A GNIS id names a feature rather than identifying one, and NHD hands
-# the same id to distinct watercourses that share a name: gnis_id='00180229' is
-# 91 reaches in two clusters 570 km apart, 61 on Sacramento Creek in Park
-# County CO and 30 on an unrelated Sacramento Creek in Phelps County NE, so
-# traversing by name dragged Nebraska into a 500 m Colorado query.
+#   path_field  the level path, which traverse fetches by
+#   name_field  the GNIS id, which traverse stops at
+#   seq_field   this reach's position in the routed network
+#   up_field    the reach immediately upstream
+#   dn_field    the reach immediately downstream
 #
-# A level path alone overshoots in the other direction: it runs from a headwater
-# to the outlet of its basin *through every name change*, so a small tributary
-# drags in the mainstem it drains into. A 1 km query near Rich Creek returned
-# 2212 reaches down the South Platte to central Nebraska for exactly that
-# reason.
-#
-# The path is therefore only the fetch unit. What comes back is then walked as a
-# network from the reaches the spatial query actually found, following
-# up/dnhydroseq and stopping where the GNIS id changes - see `traverse_path`.
-# Bounding this server-side would be tidier and is not available: any where
-# clause mentioning `gnis_id` earns a hard 403 from these services when the
-# request comes from Python, while `levelpathi=N`, `AND` and `streamorde<=N` are
-# all fine. The rejection is on the field token, not on the clause shape.
-#
-# Walking also does something no attribute filter can: it keeps the *contiguous*
-# run. Asking the service for the unnamed reaches on a level path returns every
-# unnamed reach anywhere along it - 17 on the South Platte path, 16 of them
-# order 9 and in Nebraska - whereas a walk from an unnamed headwater stops at
-# the first named reach and stays where it started.
+# `traverse_path` explains why it uses these and not something simpler.
+# nhdplusid/id3dhp is the dedup key.
 Source = namedtuple('Source', 'base layers flow_layer path_field name_field seq_field up_field dn_field')
 
 SOURCES = {
@@ -87,6 +67,28 @@ UA = 'hydrate-osm (+https://github.com/glynternet/hydrate-osm)'
 # with the request, since the identical call succeeds moments later. Observed
 # rejecting steadily for ~15s at a stretch, so back off well past that rather
 # than losing a long --huc sweep to a blip.
+#
+# There is a second, permanent kind of 403 that retrying cannot help with. These
+# services also refuse some where clauses outright when the request comes from
+# Python, and no amount of waiting changes that:
+#
+#   works:    levelpathi=23001900023955
+#             levelpathi=23001900023955 AND streamorde<=4
+#   403s:     anything naming gnis_id, quoted or not, including IS NULL
+#             IN (...)
+#             OR
+#
+# Established by testing, because it looks like throttling and is not. The body
+# curl sends is byte-identical to urlencode's, and the rejection survives every
+# header combination, both HTTP versions, and ALPN on or off; curl gets away
+# with all of these. So the trigger appears to be a SQL-injection heuristic that
+# weights the client's TLS fingerprint, and it tracks the field token rather
+# than the clause shape - which is why no rewriting of the condition gets around
+# it, and why `traverse_path` filters on the name in Python rather than asking
+# the service to.
+#
+# A run that stalls for two minutes and then dies with a 403 has hit this rather
+# than load.
 RETRY_STATUS = {403, 429, 500, 502, 503, 504}
 
 
@@ -215,33 +217,60 @@ def feature_key(f):
     return ('geom', json.dumps(f['geometry']['coordinates'])[:200])
 
 
-def id_literal(value):
-    """Render an id as a SQL literal: level paths are numeric, so no quotes.
+def path_literal(value):
+    """Render a level path id for a where clause.
 
     ArcGIS types levelpathi as a double and hands it back as a JSON number, so
-    it must go into the where clause unquoted and without the exponent or
-    trailing `.0` that str() would give a float.
+    it goes in unquoted and without the exponent or trailing `.0` that str()
+    would give a float. Level path ids are the only values this tool puts into a
+    where clause, and they are always numeric, so there is no quoting branch and
+    no string ever reaches the query.
     """
-    if isinstance(value, float) and value.is_integer():
-        return format(int(value), 'd')
-    return str(value) if isinstance(value, (int, float)) else f"'{value}'"
+    return format(int(value), 'd')
+
+
+def watercourse_of(props, src):
+    """The identity traverse walks on: the GNIS id, with unnamed as `None`.
+
+    Normalising '' to None here is what lets named and unnamed reaches share one
+    rule instead of needing a branch - see `traverse_path`.
+    """
+    return props.get(src.name_field) or None
 
 
 def traverse_path(reaches, seeds, src):
     """Walk out from the seed reaches, keeping the run that shares their name.
 
-    A level path is fetched whole because that is the only bound the services
-    will accept, but most of it is usually not what was asked for: the path runs
-    on past the name change into whatever larger watercourse it becomes. Walking
-    the network from the reaches the query actually touched, and stopping where
-    the GNIS id changes, keeps the watercourse and drops the river it drains
-    into.
+    Why a walk, rather than a filter on some field:
 
-    Unnamed reaches walk on the same rule, with `None` as their name, so an
-    unnamed headwater extends to the ends of its unnamed run and no further.
-    That is the part an attribute filter cannot express: the unnamed reaches on
-    a path are not one stretch, and asking the service for all of them returns
-    scattered fragments hundreds of kilometres away.
+    A level path - the chain of flowlines NHD groups under one `levelpathi` - is
+    the smallest unit these services will hand over, and it is nearly always
+    more than was asked for, because a path runs from a headwater to its basin
+    outlet *through every name change*. A 1 km query near Rich Creek fetches
+    2149 reaches this way, continuing down the South Platte into Nebraska, to
+    keep the 184 that are the creek in front of you.
+
+    The GNIS id is what marks that boundary, and it is safe to use here even
+    though it is not safe on its own: NHD gives the same id to unrelated
+    watercourses sharing a name (gnis_id='00180229' is two Sacramento Creeks,
+    570 km apart), but the level path has already pinned which one is meant.
+    Path first, then name.
+
+    That filtering happens in Python because it cannot happen in the query - the
+    services refuse any where clause naming gnis_id, see RETRY_STATUS above.
+
+    Named and unnamed reaches are NOT special-cased. There is one rule - keep
+    walking while the watercourse identity is unchanged - and an unnamed reach
+    simply has the identity `None`. So an unnamed headwater extends to the ends
+    of its unnamed run and stops at the first named reach, which is both correct
+    and the thing a filter could not have expressed: the unnamed reaches on a
+    path are not one stretch, and asking the service for all of them returns
+    fragments scattered along its whole length. Resist adding a branch here.
+
+    Several seeds on one path each grow their own run, since the identity is
+    read from the reach being walked rather than from any single seed. A reach
+    can only ever be added by a run it matches, so the runs cannot bleed into
+    each other.
 
     Only the main up/down links are followed. Minor divergence links
     (`dnminorhyd`) are left alone: they leave the level path by definition, so
@@ -253,18 +282,17 @@ def traverse_path(reaches, seeds, src):
         if seq is not None:
             by_seq[seq] = r
 
-    kept, stack = {}, [s for s in seeds if s in by_seq]
-    for seq in stack:
-        kept[seq] = by_seq[seq]
+    kept = {seq: by_seq[seq] for seq in seeds if seq in by_seq}
+    stack = list(kept)
     while stack:
         current = by_seq[stack.pop()]
-        name = current['properties'].get(src.name_field) or None
+        here = watercourse_of(current['properties'], src)
         for link in (src.up_field, src.dn_field):
             nxt = current['properties'].get(link)
             neighbour = by_seq.get(nxt)
-            if nxt in kept or neighbour is None:
+            if neighbour is None or nxt in kept:
                 continue
-            if (neighbour['properties'].get(src.name_field) or None) != name:
+            if watercourse_of(neighbour['properties'], src) != here:
                 continue
             kept[nxt] = neighbour
             stack.append(nxt)
@@ -278,35 +306,29 @@ def fetch(source, spatial, traverse=False, ephemeral='keep'):
         feats.extend(query_layer(src.base, layer, fields, spatial))
 
     if traverse:
-        # Which reaches on which level paths the spatial query actually touched.
-        # These are the seeds the walk starts from; everything else on a path is
-        # only kept if the walk reaches it.
+        # Which reaches, on which level paths, the spatial query actually
+        # touched. These seed the walk; everything else on a path is kept only
+        # if the walk reaches it.
         seeds = defaultdict(set)
         for f in feats:
             props = f['properties']
             path, seq = props.get(src.path_field), props.get(src.seq_field)
             if path not in (None, '') and seq is not None:
-                seeds[id_literal(path)].add(seq)
+                seeds[path].add(seq)
 
         if seeds:
             print(f'traversing {len(seeds)} stream path(s)...', file=sys.stderr)
-            # One query per path, using plain equality. A single `IN (...)`
-            # would be the obvious way to do this, and it is what curl gets away
-            # with, but from Python it returns 403 every time.
+            # One request per path. `IN (...)` would fetch them together and is
+            # refused from Python - see RETRY_STATUS above - but a query only
+            # ever touches a handful of paths, so one request each costs little.
             #
-            # Established by testing: the body curl sends is byte-identical to
-            # urlencode's, and the rejection survives every header combination,
-            # both HTTP versions, and ALPN on or off. It is not throttling - it
-            # reproduces. `field=value` and `a=1 AND b<=2` both pass from Python
-            # where `IN (...)`, `OR`, and anything naming `gnis_id` do not, so
-            # the trigger is a SQL-injection heuristic that weights the client's
-            # TLS fingerprint. Not worth fighting: there are only ever a handful
-            # of stream paths in a query, so issuing one request each costs
-            # little and works from any client.
-            for lit, found in sorted(seeds.items()):
+            # Each fetches the path whole and then discards most of it, which is
+            # why --traverse is slow: keeping 184 reaches of the South Fork
+            # South Platte means pulling all 2149 on its path first.
+            for path, found in sorted(seeds.items()):
                 whole = query_layer(src.base, src.flow_layer,
                                     src.layers[src.flow_layer],
-                                    {'where': f'{src.path_field}={lit}'})
+                                    {'where': f'{src.path_field}={path_literal(path)}'})
                 feats.extend(traverse_path(whole, found, src))
 
     kept, seen, dropped = [], set(), 0

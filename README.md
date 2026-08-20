@@ -74,10 +74,16 @@ Both halves are load-bearing, and each fixes a way the other overshoots:
   Fork South Platte, whose path continues as the South Platte River: 2,149
   reaches ending in central Nebraska.
 
-Walking the network gets both, and gets the unnamed reaches right as a side
-effect. The unnamed reaches on a path are not one stretch — asking for all of
-them returns fragments scattered along its whole length — but a walk from an
-unnamed headwater stops at the first named reach and stays where it started.
+Walking the network gets both. It also handles unnamed reaches without a special
+case, which is worth being explicit about because it looks like it should need
+one: an unnamed reach is treated as having the name "no name", so the single rule
+— *keep going while the name is unchanged* — extends it to the ends of its
+unnamed run and stops at the first named reach.
+
+That is something a filter could not have done. The unnamed reaches on a path are
+not one stretch; asking the service for all of them returns fragments scattered
+along its whole length, 570 km of it in the Rich Creek case. Only a walk knows
+which unnamed reaches are the ones you are standing next to.
 
 Expect traverse to multiply the result: the 1 km query near Rich Creek goes from
 33 features to 246, because the South Fork South Platte alone is 184 reaches over
@@ -439,12 +445,27 @@ position.
 where 3DHP resolves a name — "Platte Station Ditch" is named in 3DHP and unnamed
 in NHDPlus. Only network flowlines reliably carry GNIS ids.
 
-**SQL-shaped `where` clauses get 403'd from some clients.** `IN (...)` and `OR`
-are rejected from Python while succeeding from curl, with a byte-identical
-request body and across every header, HTTP version and ALPN combination — so
-the trigger appears to be an injection heuristic weighted by TLS fingerprint.
-A single `field=value` passes from anywhere, which is why `--traverse` issues
-one query per id rather than a single `IN`.
+**Some `where` clauses get 403'd from some clients.** Rejected from Python while
+succeeding from curl, with a byte-identical request body and across every
+header, HTTP version and ALPN combination — so the trigger appears to be an
+injection heuristic weighted by TLS fingerprint:
+
+| | |
+|---|---|
+| `levelpathi=23001900023955` | works |
+| `levelpathi=23001900023955 AND streamorde<=4` | works |
+| anything naming `gnis_id`, quoted or not, including `IS NULL` | **403** |
+| `IN (...)` | **403** |
+| `OR` | **403** |
+
+It tracks the field token rather than the clause shape, so rewriting the
+condition does not help. This is why `--traverse` issues one query per level
+path rather than a single `IN`, and why it filters on the name in Python rather
+than in the query.
+
+Note this is *not* the same as the intermittent 403s these services return under
+load, which retrying does fix. A request that retries for two minutes and then
+fails has hit the permanent kind.
 
 **Paging.** `maxRecordCount` is 2000. Watch `exceededTransferLimit`; this tool
 pages automatically, but anything you write by hand against the API should too.
@@ -473,7 +494,9 @@ value of `NHD` means that area is not lidar-derived yet.
 | drainage area | `totdasqkm` | absent (announced as future) |
 | slope | `slope` | absent |
 | Strahler order | `streamorde` | `streamorder` |
-| stream path (what `--traverse` follows) | `levelpathi` | `levelpath` |
+| stream path (what `--traverse` fetches by) | `levelpathi` | `levelpath` |
+| name (what `--traverse` stops at) | `gnis_id` | `gnisid` |
+| up/downstream links (what `--traverse` walks) | `hydroseq`, `up`/`dnhydroseq` | `hydrosequence`, `up`/`dnhydrosequence` |
 | network navigation | VAAs | Flow Network Derivatives |
 
 The perennial/intermittent split is why NHDPlus is the default. 3DHP has no
@@ -489,6 +512,12 @@ OSM-compatible, but this tool does not speak to them.
 
 **The data is 1990s cartography** in most places, not fresh survey. It is a good
 guide and a poor authority. Check it against imagery.
+
+**`--traverse` is not bounded by your query area.** It stops where a watercourse
+ends, which for a large river is a long way from where you asked. Nothing yet
+clips the result back, so check the extent of the GeoJSON before converting it —
+this has already put geometry into OSM 700 km from the area being surveyed, and
+the changeset bounding box was the only visible sign.
 
 **Nothing here uploads to OSM.** Deliberately. The output is a file for you to
 review in an editor, and that review is the whole point.
